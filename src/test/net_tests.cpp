@@ -1,19 +1,27 @@
-// Copyright (c) 2012-2018 The Bitcoin Core developers
+// Copyright (c) 2012-2020 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#include <addrdb.h>
 #include <addrman.h>
-#include <test/test_bitcoin.h>
-#include <string>
-#include <boost/test/unit_test.hpp>
-#include <hash.h>
-#include <serialize.h>
-#include <streams.h>
+#include <chainparams.h>
+#include <clientversion.h>
+#include <cstdint>
 #include <net.h>
 #include <netbase.h>
-#include <chainparams.h>
-#include <util.h>
+#include <serialize.h>
+#include <streams.h>
+#include <test/util/setup_common.h>
+#include <util/memory.h>
+#include <util/strencodings.h>
+#include <util/string.h>
+#include <util/system.h>
+#include <version.h>
+
+#include <boost/test/unit_test.hpp>
 
 #include <memory>
+#include <string>
 
 class CAddrManSerializationMock : public CAddrMan
 {
@@ -54,10 +62,10 @@ public:
         s << nUBuckets;
 
         CService serv;
-        Lookup("252.1.1.1", serv, 7777, false);
+        BOOST_CHECK(Lookup("252.1.1.1", serv, 7777, false));
         CAddress addr = CAddress(serv, NODE_NONE);
         CNetAddr resolved;
-        LookupHost("252.2.2.2", resolved, false);
+        BOOST_CHECK(LookupHost("252.2.2.2", resolved, false));
         CAddrInfo info = CAddrInfo(addr, resolved);
         s << info;
     }
@@ -78,32 +86,33 @@ BOOST_FIXTURE_TEST_SUITE(net_tests, BasicTestingSetup)
 BOOST_AUTO_TEST_CASE(cnode_listen_port)
 {
     // test default
-    unsigned short port = GetListenPort();
+    uint16_t port = GetListenPort();
     BOOST_CHECK(port == Params().GetDefaultPort());
     // test set port
-    unsigned short altPort = 12345;
-    gArgs.SoftSetArg("-port", std::to_string(altPort));
+    uint16_t altPort = 12345;
+    BOOST_CHECK(gArgs.SoftSetArg("-port", ToString(altPort)));
     port = GetListenPort();
     BOOST_CHECK(port == altPort);
 }
 
 BOOST_AUTO_TEST_CASE(caddrdb_read)
 {
-    SetDataDir("caddrdb_read");
     CAddrManUncorrupted addrmanUncorrupted;
     addrmanUncorrupted.MakeDeterministic();
 
     CService addr1, addr2, addr3;
-    Lookup("250.7.1.1", addr1, 8333, false);
-    Lookup("250.7.2.2", addr2, 9999, false);
-    Lookup("250.7.3.3", addr3, 9999, false);
+    BOOST_CHECK(Lookup("250.7.1.1", addr1, 8333, false));
+    BOOST_CHECK(Lookup("250.7.2.2", addr2, 9999, false));
+    BOOST_CHECK(Lookup("250.7.3.3", addr3, 9999, false));
+    BOOST_CHECK(Lookup(std::string("250.7.3.3", 9), addr3, 9999, false));
+    BOOST_CHECK(!Lookup(std::string("250.7.3.3\0example.com", 21), addr3, 9999, false));
 
     // Add three addresses to new table.
     CService source;
-    Lookup("252.5.1.1", source, 8333, false);
-    addrmanUncorrupted.Add(CAddress(addr1, NODE_NONE), source);
-    addrmanUncorrupted.Add(CAddress(addr2, NODE_NONE), source);
-    addrmanUncorrupted.Add(CAddress(addr3, NODE_NONE), source);
+    BOOST_CHECK(Lookup("252.5.1.1", source, 8333, false));
+    BOOST_CHECK(addrmanUncorrupted.Add(CAddress(addr1, NODE_NONE), source));
+    BOOST_CHECK(addrmanUncorrupted.Add(CAddress(addr2, NODE_NONE), source));
+    BOOST_CHECK(addrmanUncorrupted.Add(CAddress(addr3, NODE_NONE), source));
 
     // Test that the de-serialization does not throw an exception.
     CDataStream ssPeers1 = AddrmanToStream(addrmanUncorrupted);
@@ -126,16 +135,14 @@ BOOST_AUTO_TEST_CASE(caddrdb_read)
     CDataStream ssPeers2 = AddrmanToStream(addrmanUncorrupted);
 
     CAddrMan addrman2;
-    CAddrDB adb;
     BOOST_CHECK(addrman2.size() == 0);
-    adb.Read(addrman2, ssPeers2);
+    BOOST_CHECK(CAddrDB::Read(addrman2, ssPeers2));
     BOOST_CHECK(addrman2.size() == 3);
 }
 
 
 BOOST_AUTO_TEST_CASE(caddrdb_read_corrupted)
 {
-    SetDataDir("caddrdb_read_corrupted");
     CAddrManCorrupted addrmanCorrupted;
     addrmanCorrupted.MakeDeterministic();
 
@@ -159,9 +166,8 @@ BOOST_AUTO_TEST_CASE(caddrdb_read_corrupted)
     CDataStream ssPeers2 = AddrmanToStream(addrmanCorrupted);
 
     CAddrMan addrman2;
-    CAddrDB adb;
     BOOST_CHECK(addrman2.size() == 0);
-    adb.Read(addrman2, ssPeers2);
+    BOOST_CHECK(!CAddrDB::Read(addrman2, ssPeers2));
     BOOST_CHECK(addrman2.size() == 0);
 }
 
@@ -176,17 +182,222 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
 
     CAddress addr = CAddress(CService(ipv4Addr, 7777), NODE_NETWORK);
     std::string pszDest;
-    bool fInboundIn = false;
 
-    // Test that fFeeler is false by default.
-    std::unique_ptr<CNode> pnode1 = MakeUnique<CNode>(id++, NODE_NETWORK, height, hSocket, addr, 0, 0, CAddress(), pszDest, fInboundIn);
-    BOOST_CHECK(pnode1->fInbound == false);
-    BOOST_CHECK(pnode1->fFeeler == false);
+    std::unique_ptr<CNode> pnode1 = MakeUnique<CNode>(id++, NODE_NETWORK, height, hSocket, addr, 0, 0, CAddress(), pszDest, ConnectionType::OUTBOUND_FULL_RELAY);
+    BOOST_CHECK(pnode1->IsFullOutboundConn() == true);
+    BOOST_CHECK(pnode1->IsManualConn() == false);
+    BOOST_CHECK(pnode1->IsBlockOnlyConn() == false);
+    BOOST_CHECK(pnode1->IsFeelerConn() == false);
+    BOOST_CHECK(pnode1->IsAddrFetchConn() == false);
+    BOOST_CHECK(pnode1->IsInboundConn() == false);
 
-    fInboundIn = true;
-    std::unique_ptr<CNode> pnode2 = MakeUnique<CNode>(id++, NODE_NETWORK, height, hSocket, addr, 1, 1, CAddress(), pszDest, fInboundIn);
-    BOOST_CHECK(pnode2->fInbound == true);
-    BOOST_CHECK(pnode2->fFeeler == false);
+    std::unique_ptr<CNode> pnode2 = MakeUnique<CNode>(id++, NODE_NETWORK, height, hSocket, addr, 1, 1, CAddress(), pszDest, ConnectionType::INBOUND);
+    BOOST_CHECK(pnode2->IsFullOutboundConn() == false);
+    BOOST_CHECK(pnode2->IsManualConn() == false);
+    BOOST_CHECK(pnode2->IsBlockOnlyConn() == false);
+    BOOST_CHECK(pnode2->IsFeelerConn() == false);
+    BOOST_CHECK(pnode2->IsAddrFetchConn() == false);
+    BOOST_CHECK(pnode2->IsInboundConn() == true);
+}
+
+BOOST_AUTO_TEST_CASE(cnetaddr_basic)
+{
+    CNetAddr addr;
+
+    // IPv4, INADDR_ANY
+    BOOST_REQUIRE(LookupHost("0.0.0.0", addr, false));
+    BOOST_REQUIRE(!addr.IsValid());
+    BOOST_REQUIRE(addr.IsIPv4());
+
+    BOOST_CHECK(addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "0.0.0.0");
+
+    // IPv4, INADDR_NONE
+    BOOST_REQUIRE(LookupHost("255.255.255.255", addr, false));
+    BOOST_REQUIRE(!addr.IsValid());
+    BOOST_REQUIRE(addr.IsIPv4());
+
+    BOOST_CHECK(!addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "255.255.255.255");
+
+    // IPv4, casual
+    BOOST_REQUIRE(LookupHost("12.34.56.78", addr, false));
+    BOOST_REQUIRE(addr.IsValid());
+    BOOST_REQUIRE(addr.IsIPv4());
+
+    BOOST_CHECK(!addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "12.34.56.78");
+
+    // IPv6, in6addr_any
+    BOOST_REQUIRE(LookupHost("::", addr, false));
+    BOOST_REQUIRE(!addr.IsValid());
+    BOOST_REQUIRE(addr.IsIPv6());
+
+    BOOST_CHECK(addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "::");
+
+    // IPv6, casual
+    BOOST_REQUIRE(LookupHost("1122:3344:5566:7788:9900:aabb:ccdd:eeff", addr, false));
+    BOOST_REQUIRE(addr.IsValid());
+    BOOST_REQUIRE(addr.IsIPv6());
+
+    BOOST_CHECK(!addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "1122:3344:5566:7788:9900:aabb:ccdd:eeff");
+
+    // TORv2
+    addr.SetSpecial("6hzph5hv6337r6p2.onion");
+    BOOST_REQUIRE(addr.IsValid());
+    BOOST_REQUIRE(addr.IsTor());
+
+    BOOST_CHECK(!addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "6hzph5hv6337r6p2.onion");
+
+    // Internal
+    addr.SetInternal("esffpp");
+    BOOST_REQUIRE(!addr.IsValid()); // "internal" is considered invalid
+    BOOST_REQUIRE(addr.IsInternal());
+
+    BOOST_CHECK(!addr.IsBindAny());
+    BOOST_CHECK_EQUAL(addr.ToString(), "esffpvrt3wpeaygy.internal");
+}
+
+BOOST_AUTO_TEST_CASE(cnetaddr_serialize)
+{
+    CNetAddr addr;
+    CDataStream s(SER_NETWORK, PROTOCOL_VERSION);
+
+    addr.SetInternal("a");
+    s << addr;
+    BOOST_CHECK_EQUAL(HexStr(s), "fd6b88c08724ca978112ca1bbdcafac2");
+    s.clear();
+}
+
+// prior to PR #14728, this test triggers an undefined behavior
+BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test)
+{
+    // set up local addresses; all that's necessary to reproduce the bug is
+    // that a normal IPv4 address is among the entries, but if this address is
+    // !IsRoutable the undefined behavior is easier to trigger deterministically
+    {
+        LOCK(cs_mapLocalHost);
+        in_addr ipv4AddrLocal;
+        ipv4AddrLocal.s_addr = 0x0100007f;
+        CNetAddr addr = CNetAddr(ipv4AddrLocal);
+        LocalServiceInfo lsi;
+        lsi.nScore = 23;
+        lsi.nPort = 42;
+        mapLocalHost[addr] = lsi;
+    }
+
+    // create a peer with an IPv4 address
+    in_addr ipv4AddrPeer;
+    ipv4AddrPeer.s_addr = 0xa0b0c001;
+    CAddress addr = CAddress(CService(ipv4AddrPeer, 7777), NODE_NETWORK);
+    std::unique_ptr<CNode> pnode = MakeUnique<CNode>(0, NODE_NETWORK, 0, INVALID_SOCKET, addr, 0, 0, CAddress{}, std::string{}, ConnectionType::OUTBOUND_FULL_RELAY);
+    pnode->fSuccessfullyConnected.store(true);
+
+    // the peer claims to be reaching us via IPv6
+    in6_addr ipv6AddrLocal;
+    memset(ipv6AddrLocal.s6_addr, 0, 16);
+    ipv6AddrLocal.s6_addr[0] = 0xcc;
+    CAddress addrLocal = CAddress(CService(ipv6AddrLocal, 7777), NODE_NETWORK);
+    pnode->SetAddrLocal(addrLocal);
+
+    // before patch, this causes undefined behavior detectable with clang's -fsanitize=memory
+    AdvertiseLocal(&*pnode);
+
+    // suppress no-checks-run warning; if this test fails, it's by triggering a sanitizer
+    BOOST_CHECK(1);
+}
+
+
+BOOST_AUTO_TEST_CASE(LimitedAndReachable_Network)
+{
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), true);
+
+    SetReachable(NET_IPV4, false);
+    SetReachable(NET_IPV6, false);
+    SetReachable(NET_ONION, false);
+
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), false);
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), false);
+    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), false);
+
+    SetReachable(NET_IPV4, true);
+    SetReachable(NET_IPV6, true);
+    SetReachable(NET_ONION, true);
+
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), true);
+}
+
+BOOST_AUTO_TEST_CASE(LimitedAndReachable_NetworkCaseUnroutableAndInternal)
+{
+    BOOST_CHECK_EQUAL(IsReachable(NET_UNROUTABLE), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_INTERNAL), true);
+
+    SetReachable(NET_UNROUTABLE, false);
+    SetReachable(NET_INTERNAL, false);
+
+    BOOST_CHECK_EQUAL(IsReachable(NET_UNROUTABLE), true); // Ignored for both networks
+    BOOST_CHECK_EQUAL(IsReachable(NET_INTERNAL), true);
+}
+
+CNetAddr UtilBuildAddress(unsigned char p1, unsigned char p2, unsigned char p3, unsigned char p4)
+{
+    unsigned char ip[] = {p1, p2, p3, p4};
+
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sockaddr_in)); // initialize the memory block
+    memcpy(&(sa.sin_addr), &ip, sizeof(ip));
+    return CNetAddr(sa.sin_addr);
+}
+
+
+BOOST_AUTO_TEST_CASE(LimitedAndReachable_CNetAddr)
+{
+    CNetAddr addr = UtilBuildAddress(0x001, 0x001, 0x001, 0x001); // 1.1.1.1
+
+    SetReachable(NET_IPV4, true);
+    BOOST_CHECK_EQUAL(IsReachable(addr), true);
+
+    SetReachable(NET_IPV4, false);
+    BOOST_CHECK_EQUAL(IsReachable(addr), false);
+
+    SetReachable(NET_IPV4, true); // have to reset this, because this is stateful.
+}
+
+
+BOOST_AUTO_TEST_CASE(LocalAddress_BasicLifecycle)
+{
+    CService addr = CService(UtilBuildAddress(0x002, 0x001, 0x001, 0x001), 1000); // 2.1.1.1:1000
+
+    SetReachable(NET_IPV4, true);
+
+    BOOST_CHECK_EQUAL(IsLocal(addr), false);
+    BOOST_CHECK_EQUAL(AddLocal(addr, 1000), true);
+    BOOST_CHECK_EQUAL(IsLocal(addr), true);
+
+    RemoveLocal(addr);
+    BOOST_CHECK_EQUAL(IsLocal(addr), false);
+}
+
+BOOST_AUTO_TEST_CASE(PoissonNextSend)
+{
+    g_mock_deterministic_tests = true;
+
+    int64_t now = 5000;
+    int average_interval_seconds = 600;
+
+    auto poisson = ::PoissonNextSend(now, average_interval_seconds);
+    std::chrono::microseconds poisson_chrono = ::PoissonNextSend(std::chrono::microseconds{now}, std::chrono::seconds{average_interval_seconds});
+
+    BOOST_CHECK_EQUAL(poisson, poisson_chrono.count());
+
+    g_mock_deterministic_tests = false;
 }
 
 BOOST_AUTO_TEST_SUITE_END()
