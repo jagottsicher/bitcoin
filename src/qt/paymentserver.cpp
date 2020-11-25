@@ -26,7 +26,6 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QDataStream>
-#include <QDateTime>
 #include <QDebug>
 #include <QFile>
 #include <QFileOpenEvent>
@@ -94,12 +93,12 @@ void PaymentServer::ipcParseCommandLine(int argc, char* argv[])
             SendCoinsRecipient r;
             if (GUIUtil::parseBitcoinURI(arg, &r) && !r.address.isEmpty())
             {
-                auto tempChainParams = CreateChainParams(CBaseChainParams::MAIN);
+                auto tempChainParams = CreateChainParams(gArgs, CBaseChainParams::MAIN);
 
                 if (IsValidDestinationString(r.address.toStdString(), *tempChainParams)) {
                     SelectParams(CBaseChainParams::MAIN);
                 } else {
-                    tempChainParams = CreateChainParams(CBaseChainParams::TESTNET);
+                    tempChainParams = CreateChainParams(gArgs, CBaseChainParams::TESTNET);
                     if (IsValidDestinationString(r.address.toStdString(), *tempChainParams)) {
                         SelectParams(CBaseChainParams::TESTNET);
                     }
